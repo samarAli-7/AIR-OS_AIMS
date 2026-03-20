@@ -1,0 +1,907 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GestureOS — Windows Hand Gesture Control</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+
+:root {
+  --bg:     #080810;
+  --bg2:    #0f0f1a;
+  --bg3:    #171725;
+  --bg4:    #1e1e2e;
+  --border: #252535;
+  --bdr2:   #353550;
+  --neon:   #00ff88;
+  --cyan:   #00d4ff;
+  --amber:  #ffaa00;
+  --red:    #ff5555;
+  --purple: #aa88ff;
+  --text:   #e0e0f0;
+  --text2:  #7a7a9a;
+  --text3:  #3a3a5a;
+  --mono:   'Space Mono', monospace;
+  --sans:   'DM Sans', sans-serif;
+  --r:      3px;
+}
+
+*,*::before,*::after { box-sizing: border-box; margin:0; padding:0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* CRT scanlines */
+body::after {
+  content:'';
+  position:fixed;
+  inset:0;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.025) 2px, rgba(0,0,0,0.025) 4px);
+  pointer-events:none;
+  z-index:9999;
+}
+
+/* ══ HEADER ══ */
+header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:14px 24px;
+  background:var(--bg2);
+  border-bottom:1px solid var(--border);
+  position:sticky; top:0; z-index:200;
+}
+
+.logo { display:flex; align-items:center; gap:12px; }
+
+.logo-hex {
+  width:32px; height:32px;
+  background:var(--neon);
+  clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);
+  animation:hexPulse 2.5s ease-in-out infinite;
+}
+@keyframes hexPulse {
+  0%,100%{opacity:1;transform:scale(1);}
+  50%{opacity:.6;transform:scale(.93);}
+}
+
+.logo-text {
+  font-family:var(--mono);
+  font-size:18px; font-weight:700; letter-spacing:3px;
+}
+.logo-text em { color:var(--neon); font-style:normal; }
+.logo-sub { font-family:var(--mono); font-size:10px; color:var(--text3); letter-spacing:2px; }
+
+.header-pills { display:flex; gap:8px; align-items:center; }
+
+.pill {
+  font-family:var(--mono); font-size:10px; letter-spacing:1.5px;
+  padding:5px 12px; border-radius:20px; border:1px solid;
+  text-transform:uppercase; transition:all .3s;
+  white-space:nowrap;
+}
+.pill.off  { border-color:var(--border); color:var(--text3); }
+.pill.cam  { border-color:var(--neon);  color:var(--neon);  background:rgba(0,255,136,.07); box-shadow:0 0 12px rgba(0,255,136,.15); }
+.pill.mdl  { border-color:var(--cyan);  color:var(--cyan);  background:rgba(0,212,255,.07); box-shadow:0 0 12px rgba(0,212,255,.15); }
+
+/* ══ LAYOUT ══ */
+.layout {
+  display:grid;
+  grid-template-columns:1fr 390px;
+  min-height:calc(100vh - 61px);
+}
+
+/* ══ VIDEO PANEL ══ */
+.vpanel { border-right:1px solid var(--border); display:flex; flex-direction:column; }
+
+.vwrap {
+  position:relative; background:#000;
+  flex:1; min-height:360px; overflow:hidden;
+}
+
+#videoFeed {
+  width:100%; height:100%; object-fit:cover; display:none;
+}
+
+.vcam-off {
+  position:absolute; inset:0;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:14px; color:var(--text3); font-family:var(--mono);
+}
+.vcam-icon { font-size:52px; opacity:.25; animation:float 3s ease-in-out infinite; }
+@keyframes float{0%,100%{transform:translateY(0);}50%{transform:translateY(-8px);}}
+.vcam-off p { font-size:12px; letter-spacing:2px; }
+
+/* Recording badge */
+.rec-badge {
+  position:absolute; top:14px; left:14px;
+  background:rgba(200,0,0,.9);
+  color:#fff; font-family:var(--mono); font-size:12px;
+  padding:6px 14px; border-radius:3px;
+  display:none; align-items:center; gap:8px; letter-spacing:1px;
+}
+.rec-badge.on { display:flex; }
+.rdot { width:8px; height:8px; border-radius:50%; background:#fff; animation:blink .65s ease-in-out infinite; }
+@keyframes blink{0%,100%{opacity:1;}50%{opacity:0;}}
+
+/* Gesture overlay */
+.govl {
+  position:absolute; bottom:0; left:0; right:0;
+  padding:14px 18px;
+  background:linear-gradient(transparent, rgba(0,0,0,.88));
+  display:none;
+}
+.govl.on { display:block; }
+.gname {
+  font-family:var(--mono); font-size:22px; font-weight:700;
+  color:var(--neon); text-shadow:0 0 16px rgba(0,255,136,.7); letter-spacing:2px;
+}
+.gconf-txt { font-family:var(--mono); font-size:11px; color:var(--text2); margin-top:2px; }
+.cbar-wrap { height:4px; background:rgba(255,255,255,.08); border-radius:2px; overflow:hidden; margin-top:8px; }
+.cbar { height:100%; background:var(--neon); border-radius:2px; transition:width .15s; box-shadow:0 0 8px rgba(0,255,136,.5); }
+
+/* Action flash overlay */
+.action-flash {
+  position:absolute; top:14px; right:14px;
+  background:rgba(0,255,136,.12);
+  border:1px solid var(--neon);
+  color:var(--neon);
+  font-family:var(--mono); font-size:13px;
+  padding:8px 16px; border-radius:3px;
+  opacity:0; transition:opacity .2s;
+  pointer-events:none;
+}
+.action-flash.show { opacity:1; }
+
+/* Controls bar */
+.vcontrols {
+  display:flex; align-items:center; gap:10px;
+  padding:12px 18px; border-top:1px solid var(--border);
+  background:var(--bg2); flex-wrap:wrap;
+}
+
+.fps-badge { font-family:var(--mono); font-size:11px; color:var(--text3); margin-left:auto; }
+
+/* ══ BUTTONS ══ */
+.btn {
+  font-family:var(--mono); font-size:11px; font-weight:700;
+  letter-spacing:1.5px; text-transform:uppercase;
+  padding:9px 18px; border:1px solid; border-radius:var(--r);
+  cursor:pointer; transition:all .18s;
+  display:inline-flex; align-items:center; gap:7px;
+  white-space:nowrap; outline:none; background:none;
+}
+.btn:active { transform:scale(.97); }
+
+.btn-g  { border-color:var(--neon);   color:var(--neon);   }
+.btn-g:hover  { background:rgba(0,255,136,.08); box-shadow:0 0 14px rgba(0,255,136,.15); }
+
+.btn-c  { border-color:var(--cyan);   color:var(--cyan);   }
+.btn-c:hover  { background:rgba(0,212,255,.08); box-shadow:0 0 14px rgba(0,212,255,.15); }
+
+.btn-r  { border-color:var(--red);    color:var(--red);    }
+.btn-r:hover  { background:rgba(255,85,85,.08);  box-shadow:0 0 14px rgba(255,85,85,.15); }
+
+.btn-a  { border-color:var(--amber);  color:var(--amber);  }
+.btn-a:hover  { background:rgba(255,170,0,.08); box-shadow:0 0 14px rgba(255,170,0,.15); }
+
+.btn-ghost { border-color:var(--bdr2); color:var(--text2); }
+.btn-ghost:hover { border-color:var(--text2); color:var(--text); }
+
+.btn:disabled { opacity:.3; cursor:not-allowed; pointer-events:none; }
+
+#camToggle.active { border-color:var(--red); color:var(--red); }
+
+/* ══ SIDEBAR ══ */
+.sidebar {
+  display:flex; flex-direction:column;
+  overflow-y:auto; max-height:calc(100vh - 61px);
+}
+
+.panel { border-bottom:1px solid var(--border); padding:18px 20px; }
+
+.ptitle {
+  font-family:var(--mono); font-size:10px; font-weight:700;
+  letter-spacing:2.5px; text-transform:uppercase; color:var(--text2);
+  margin-bottom:14px;
+}
+.ptitle .g { color:var(--neon); }
+.ptitle .c { color:var(--cyan); }
+.ptitle .a { color:var(--amber); }
+.ptitle .r { color:var(--red); }
+
+/* Capability strip */
+.cap-strip { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; }
+.cap-badge {
+  font-family:var(--mono); font-size:10px; letter-spacing:1px;
+  padding:4px 10px; border-radius:3px; border:1px solid;
+}
+.cap-badge.ok  { border-color:rgba(0,255,136,.4); color:var(--neon); background:rgba(0,255,136,.05); }
+.cap-badge.bad { border-color:rgba(255,85,85,.4);  color:var(--red);  background:rgba(255,85,85,.05); }
+
+/* Input */
+input[type="text"] {
+  width:100%;
+  background:var(--bg3); border:1px solid var(--bdr2);
+  border-radius:var(--r); color:var(--text);
+  font-family:var(--mono); font-size:13px;
+  padding:10px 13px; outline:none; transition:border-color .2s;
+  letter-spacing:.5px;
+}
+input[type="text"]:focus { border-color:var(--neon); box-shadow:0 0 0 3px rgba(0,255,136,.07); }
+input[type="text"]::placeholder { color:var(--text3); }
+
+.input-row { display:flex; gap:8px; margin-bottom:10px; }
+
+.record-hint {
+  font-family:var(--mono); font-size:11px; color:var(--text3);
+  line-height:1.6; margin-top:8px;
+}
+
+/* Stats */
+.stats-row { display:flex; gap:8px; margin-bottom:12px; }
+.stat {
+  flex:1; background:var(--bg3); border:1px solid var(--border);
+  border-radius:var(--r); padding:10px; text-align:center;
+}
+.sval { font-family:var(--mono); font-size:20px; font-weight:700; color:var(--neon); }
+.slbl { font-family:var(--mono); font-size:9px; color:var(--text3); letter-spacing:1.5px; margin-top:2px; }
+
+/* Gesture list */
+.glist { display:flex; flex-direction:column; gap:6px; max-height:230px; overflow-y:auto; }
+
+.gitem {
+  display:flex; align-items:center; gap:9px;
+  padding:9px 11px;
+  background:var(--bg3); border:1px solid var(--border);
+  border-radius:var(--r); transition:border-color .15s;
+}
+.gitem:hover { border-color:var(--bdr2); }
+.gitem.live { border-color:var(--neon); background:rgba(0,255,136,.03); }
+
+.gdot { width:7px; height:7px; border-radius:50%; background:var(--text3); flex-shrink:0; }
+.gdot.trained { background:var(--neon); box-shadow:0 0 5px rgba(0,255,136,.6); }
+
+.gname { font-family:var(--mono); font-size:12px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.gcnt  { font-family:var(--mono); font-size:10px; color:var(--text3); flex-shrink:0; }
+
+.gmini { display:flex; gap:4px; }
+.mbtn {
+  background:none; border:1px solid var(--border); color:var(--text3);
+  border-radius:2px; padding:3px 7px; font-size:10px; cursor:pointer;
+  font-family:var(--mono); transition:all .15s;
+}
+.mbtn:hover { border-color:var(--cyan); color:var(--cyan); }
+.mbtn.del:hover { border-color:var(--red); color:var(--red); }
+
+/* Train */
+.train-row { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.spin-wrap { display:none; align-items:center; gap:8px; font-family:var(--mono); font-size:11px; color:var(--amber); }
+.spinner { width:15px; height:15px; border:2px solid var(--bdr2); border-top-color:var(--amber); border-radius:50%; animation:spin .7s linear infinite; }
+@keyframes spin{to{transform:rotate(360deg);}}
+.acc-box { font-family:var(--mono); font-size:26px; font-weight:700; color:var(--neon); display:none; text-shadow:0 0 16px rgba(0,255,136,.4); }
+
+/* Action assign grid */
+.aassign-list { display:flex; flex-direction:column; gap:7px; }
+.aitem {
+  display:flex; align-items:center; gap:8px;
+  padding:8px 10px;
+  background:var(--bg3); border:1px solid var(--border); border-radius:var(--r);
+}
+.aitem-name { font-family:var(--mono); font-size:11px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.aitem-action { font-family:var(--mono); font-size:10px; color:var(--cyan); flex-shrink:0; max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* Log */
+.alog { display:flex; flex-direction:column; gap:4px; max-height:150px; overflow-y:auto; scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
+.log-entry {
+  display:flex; align-items:center; gap:8px;
+  padding:7px 9px; background:var(--bg3); border-radius:var(--r);
+  border-left:2px solid var(--neon);
+  font-family:var(--mono); font-size:11px;
+  animation:sldIn .2s ease;
+}
+@keyframes sldIn{from{opacity:0;transform:translateX(-8px);}to{opacity:1;transform:translateX(0);}}
+.lt { color:var(--text3); flex-shrink:0; }
+.lg { color:var(--neon); flex:1; }
+.la { color:var(--cyan); flex-shrink:0; }
+
+/* Toast */
+#toast { position:fixed; bottom:22px; right:22px; z-index:8888; display:flex; flex-direction:column; gap:7px; pointer-events:none; }
+.toast-item {
+  font-family:var(--mono); font-size:12px; letter-spacing:.5px;
+  padding:11px 18px; border-radius:var(--r); border:1px solid;
+  max-width:320px;
+  animation:tIn .25s ease, tOut .25s ease 2.75s forwards;
+}
+.toast-item.success { background:rgba(0,255,136,.09); border-color:var(--neon); color:var(--neon); }
+.toast-item.error   { background:rgba(255,85,85,.09);  border-color:var(--red);  color:var(--red);  }
+.toast-item.warning { background:rgba(255,170,0,.09);  border-color:var(--amber);color:var(--amber);}
+.toast-item.info    { background:rgba(0,212,255,.09);  border-color:var(--cyan); color:var(--cyan); }
+@keyframes tIn  { from{opacity:0;transform:translateY(8px);}  to{opacity:1;transform:translateY(0);} }
+@keyframes tOut { from{opacity:1;transform:translateY(0);}  to{opacity:0;transform:translateY(8px);} }
+
+/* Modal */
+.modal-bg {
+  position:fixed; inset:0; background:rgba(0,0,0,.82);
+  z-index:500; display:none; align-items:center; justify-content:center;
+  backdrop-filter:blur(5px);
+}
+.modal-bg.open { display:flex; }
+.modal {
+  background:var(--bg2); border:1px solid var(--bdr2);
+  border-radius:5px; padding:26px; width:380px;
+  box-shadow:0 24px 64px rgba(0,0,0,.8);
+  animation:mIn .2s ease;
+}
+@keyframes mIn{from{opacity:0;transform:scale(.94);}to{opacity:1;transform:scale(1);}}
+.modal-label { font-family:var(--mono); font-size:10px; color:var(--cyan); letter-spacing:2px; text-transform:uppercase; margin-bottom:4px; }
+.modal-gesture { font-family:var(--mono); font-size:22px; font-weight:700; color:var(--text); margin-bottom:18px; }
+.modal-hint { font-family:var(--mono); font-size:10px; color:var(--text3); margin-bottom:6px; letter-spacing:1px; }
+.modal-foot { display:flex; gap:8px; justify-content:flex-end; margin-top:18px; }
+
+/* Select */
+select {
+  width:100%; background:var(--bg3); border:1px solid var(--bdr2);
+  border-radius:var(--r); color:var(--text);
+  font-family:var(--mono); font-size:12px;
+  padding:9px 12px; outline:none; cursor:pointer;
+  transition:border-color .2s;
+}
+select:focus { border-color:var(--cyan); }
+select option { background:var(--bg3); }
+optgroup { color:var(--text2); font-style:normal; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width:3px; }
+::-webkit-scrollbar-thumb { background:var(--bdr2); border-radius:2px; }
+
+/* Responsive */
+@media(max-width:900px) {
+  .layout { grid-template-columns:1fr; }
+  .sidebar { max-height:none; }
+}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="logo">
+    <div class="logo-hex"></div>
+    <div>
+      <div class="logo-text">Gesture<em>OS</em></div>
+      <div class="logo-sub">Windows Edition</div>
+    </div>
+  </div>
+  <div class="header-pills">
+    <div class="pill off" id="camPill">● CAMERA OFF</div>
+    <div class="pill off" id="mdlPill">◆ NO MODEL</div>
+  </div>
+</header>
+
+<!-- LAYOUT -->
+<div class="layout">
+
+  <!-- ══ VIDEO ══ -->
+  <div class="vpanel">
+    <div class="vwrap">
+      <div class="vcam-off" id="vcamOff">
+        <div class="vcam-icon">🖐️</div>
+        <p>CAMERA OFFLINE</p>
+        <p style="font-size:10px;margin-top:4px;letter-spacing:1px;">Click START CAMERA below</p>
+      </div>
+      <img id="videoFeed" alt="Camera feed">
+
+      <div class="rec-badge" id="recBadge">
+        <div class="rdot"></div>
+        <span id="recLabel">REC</span>
+      </div>
+
+      <div class="govl" id="govl">
+        <div class="gname" id="gname">—</div>
+        <div class="gconf-txt" id="gconfTxt">—</div>
+        <div class="cbar-wrap"><div class="cbar" id="cbar" style="width:0%"></div></div>
+      </div>
+
+      <div class="action-flash" id="actionFlash">⚡ —</div>
+    </div>
+
+    <div class="vcontrols">
+      <button class="btn btn-g" id="camToggle" onclick="toggleCamera()">▶ START CAMERA</button>
+      <button class="btn btn-a" id="recStart"  onclick="startRec()" disabled>⏺ RECORD</button>
+      <button class="btn btn-r" id="recStop"   onclick="stopRec()"  disabled style="display:none">⏹ STOP</button>
+      <div class="fps-badge" id="fpsBadge">— fps</div>
+    </div>
+  </div>
+
+  <!-- ══ SIDEBAR ══ -->
+  <div class="sidebar">
+
+    <!-- Capabilities -->
+    <div class="panel" id="capPanel" style="display:none">
+      <div class="ptitle">⚙ <span class="c">WINDOWS CAPABILITIES</span></div>
+      <div class="cap-strip" id="capStrip"></div>
+    </div>
+
+    <!-- Stats -->
+    <div class="panel">
+      <div class="stats-row">
+        <div class="stat"><div class="sval" id="sGestures">0</div><div class="slbl">GESTURES</div></div>
+        <div class="stat"><div class="sval" id="sSamples"  style="color:var(--cyan)">0</div><div class="slbl">SAMPLES</div></div>
+        <div class="stat"><div class="sval" id="sAccuracy" style="color:var(--amber)">—</div><div class="slbl">ACCURACY</div></div>
+      </div>
+    </div>
+
+    <!-- Record -->
+    <div class="panel">
+      <div class="ptitle">⏺ <span class="a">RECORD GESTURE</span></div>
+      <div class="input-row">
+        <input type="text" id="gestureNameInput" placeholder="e.g. thumbs_up / open_palm" maxlength="30">
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-a" id="recStartPanel" onclick="startRec()" disabled>⏺ START REC</button>
+        <button class="btn btn-r" id="recStopPanel"  onclick="stopRec()"  disabled style="display:none">⏹ STOP REC</button>
+      </div>
+      <p class="record-hint">1 Name the gesture → 2 Click START → 3 Hold gesture in front of cam → 4 Click STOP<br>Record 3-5 clips (40-80 samples each) for best accuracy.</p>
+    </div>
+
+    <!-- Gesture Library -->
+    <div class="panel">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+        <div class="ptitle" style="margin:0">🖐 <span class="g">GESTURE LIBRARY</span></div>
+        <button class="btn btn-c" id="trainBtn" onclick="trainModel()" style="padding:6px 14px;font-size:10px;">⚡ TRAIN</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+        <div class="spin-wrap" id="spinWrap"><div class="spinner"></div><span>Training...</span></div>
+        <div class="acc-box"  id="accBox">—%</div>
+      </div>
+      <div class="glist" id="gestureList">
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text3);text-align:center;padding:18px;">No gestures recorded yet</div>
+      </div>
+    </div>
+
+    <!-- Action Assign -->
+    <div class="panel">
+      <div class="ptitle">⚡ <span class="c">GESTURE → ACTION MAP</span></div>
+      <div class="aassign-list" id="aassignList">
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text3);">Train model first</div>
+      </div>
+    </div>
+
+    <!-- Live Log -->
+    <div class="panel" style="flex:1">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div class="ptitle" style="margin:0">📋 <span class="g">LIVE ACTION LOG</span></div>
+        <button class="mbtn" onclick="clearLog()">CLEAR</button>
+      </div>
+      <div class="alog" id="alog">
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text3);">Waiting for gesture actions...</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<!-- Assign Modal -->
+<div class="modal-bg" id="assignModal">
+  <div class="modal">
+    <div class="modal-label">Assign System Action</div>
+    <div class="modal-gesture" id="mGesture">—</div>
+    <div class="modal-hint">SELECT ACTION</div>
+    <select id="mActionSelect">
+      <option value="">— Choose a system action —</option>
+      <optgroup label="🔊 Volume">
+        <option value="volume_up">🔊 Volume Up (+5%)</option>
+        <option value="volume_down">🔉 Volume Down (-5%)</option>
+        <option value="volume_mute">🔇 Mute / Unmute</option>
+      </optgroup>
+      <optgroup label="☀️ Brightness">
+        <option value="brightness_up">☀️ Brightness Up (+10%)</option>
+        <option value="brightness_down">🌙 Brightness Down (-10%)</option>
+      </optgroup>
+      <optgroup label="📸 Capture">
+        <option value="screenshot">📸 Screenshot (saves to Desktop)</option>
+      </optgroup>
+      <optgroup label="🖱️ Cursor">
+        <option value="cursor_left">⬅️ Cursor Left</option>
+        <option value="cursor_right">➡️ Cursor Right</option>
+        <option value="cursor_up">⬆️ Cursor Up</option>
+        <option value="cursor_down">⬇️ Cursor Down</option>
+      </optgroup>
+      <optgroup label="👆 Click">
+        <option value="left_click">👆 Left Click</option>
+        <option value="right_click">👉 Right Click</option>
+        <option value="double_click">👆👆 Double Click</option>
+      </optgroup>
+      <optgroup label="⏫ Scroll">
+        <option value="scroll_up">⏫ Scroll Up</option>
+        <option value="scroll_down">⏬ Scroll Down</option>
+      </optgroup>
+      <optgroup label="🎵 Media">
+        <option value="media_play_pause">⏯️ Play / Pause</option>
+        <option value="media_next">⏭️ Next Track</option>
+        <option value="media_prev">⏮️ Previous Track</option>
+      </optgroup>
+      <optgroup label="🪟 Window">
+        <option value="minimize_window">🗕 Show Desktop (Win+D)</option>
+        <option value="switch_window">⬛ Switch Window (Alt+Tab)</option>
+        <option value="close_window">✖️ Close Window (Alt+F4)</option>
+        <option value="zoom_in">🔍+ Zoom In (Ctrl++)</option>
+        <option value="zoom_out">🔍- Zoom Out (Ctrl+-)</option>
+      </optgroup>
+    </select>
+    <div style="margin-top:14px;">
+      <button class="btn btn-g" id="testActionBtn" onclick="testCurrentAction()" style="padding:7px 14px;font-size:10px;">▶ TEST</button>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeModal()">CANCEL</button>
+      <button class="btn btn-c"    onclick="confirmAssign()">ASSIGN ⚡</button>
+    </div>
+  </div>
+</div>
+
+<script>
+
+const socket = io();
+let cameraActive = false;
+let modelTrained = false;
+let gestureData   = {}; 
+let customActions = {};   
+let currentAssignGesture = null;
+let currentGestureLive = '';
+
+
+socket.on('connect', () => {
+  fetchStatus();
+});
+
+socket.on('frame', d => {
+  const img = document.getElementById('videoFeed');
+  img.src = 'data:image/jpeg;base64,' + d.image;
+  document.getElementById('fpsBadge').textContent = d.fps + ' fps';
+
+  if (d.gesture && d.gesture !== 'No Hand') {
+    document.getElementById('govl').classList.add('on');
+    document.getElementById('gname').textContent   = d.gesture;
+    document.getElementById('gconfTxt').textContent = d.confidence + '% confidence';
+    document.getElementById('cbar').style.width     = d.confidence + '%';
+
+    if (d.gesture !== currentGestureLive) {
+      if (currentGestureLive) {
+        const prev = document.getElementById('gi-' + currentGestureLive);
+        if (prev) prev.classList.remove('live');
+      }
+      const cur = document.getElementById('gi-' + d.gesture);
+      if (cur) cur.classList.add('live');
+      currentGestureLive = d.gesture;
+    }
+  } else {
+    document.getElementById('govl').classList.remove('on');
+    if (currentGestureLive) {
+      const el = document.getElementById('gi-' + currentGestureLive);
+      if (el) el.classList.remove('live');
+      currentGestureLive = '';
+    }
+  }
+
+  if (d.recording) {
+    document.getElementById('recBadge').classList.add('on');
+    document.getElementById('recLabel').textContent = `REC [${d.recording_name}] ${d.samples}`;
+  } else {
+    document.getElementById('recBadge').classList.remove('on');
+  }
+});
+
+socket.on('notification', d => showToast(d.msg, d.type || 'info'));
+
+socket.on('action_fired', d => {
+  addLog(d.gesture, d.icon + ' ' + d.label);
+  flashAction(d.icon + ' ' + d.label);
+});
+
+socket.on('training_status', d => {
+  const sw = document.getElementById('spinWrap');
+  const ab = document.getElementById('accBox');
+  if (d.status === 'training') {
+    sw.style.display = 'flex'; ab.style.display = 'none';
+  } else if (d.status === 'done') {
+    sw.style.display = 'none'; ab.style.display = 'block';
+    ab.textContent = d.accuracy + '%';
+    document.getElementById('sAccuracy').textContent = d.accuracy + '%';
+    modelTrained = true;
+    setModelPill(true);
+    showToast(' ' + d.msg, 'success');
+    renderAassign();
+    renderGestureList();
+  } else {
+    sw.style.display = 'none';
+    showToast(' Training failed: ' + d.msg, 'error');
+  }
+});
+
+
+async function toggleCamera() {
+  const btn = document.getElementById('camToggle');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/camera/toggle', { method:'POST' });
+    const d = await r.json();
+    if (d.error) { showToast(' ' + d.error, 'error'); }
+    else {
+      cameraActive = d.camera_active;
+      updateCameraUI();
+      showToast(cameraActive ? '📷 Camera started' : '📷 Camera stopped', cameraActive ? 'success' : 'info');
+    }
+  } catch(e) { showToast(' Server connection error', 'error'); }
+  btn.disabled = false;
+}
+
+function updateCameraUI() {
+  const btn  = document.getElementById('camToggle');
+  const pill = document.getElementById('camPill');
+  const feed = document.getElementById('videoFeed');
+  const off  = document.getElementById('vcamOff');
+
+  if (cameraActive) {
+    btn.innerHTML = '■ STOP CAMERA';
+    btn.classList.add('active');
+    pill.className = 'pill cam'; pill.textContent = '● CAMERA ON';
+    feed.style.display = 'block'; off.style.display = 'none';
+    document.getElementById('recStart').disabled = false;
+    document.getElementById('recStartPanel').disabled = false;
+  } else {
+    btn.innerHTML = '▶ START CAMERA';
+    btn.classList.remove('active');
+    pill.className = 'pill off'; pill.textContent = '● CAMERA OFF';
+    feed.style.display = 'none'; off.style.display = 'flex';
+    document.getElementById('recStart').disabled = true;
+    document.getElementById('recStartPanel').disabled = true;
+    document.getElementById('govl').classList.remove('on');
+    document.getElementById('fpsBadge').textContent = '— fps';
+  }
+}
+
+function setModelPill(trained) {
+  const p = document.getElementById('mdlPill');
+  if (trained) { p.className = 'pill mdl'; p.textContent = '◆ MODEL READY'; }
+  else          { p.className = 'pill off';  p.textContent = '◆ NO MODEL'; }
+}
+
+async function startRec() {
+  const inp  = document.getElementById('gestureNameInput');
+  const name = inp.value.trim().toLowerCase().replace(/\s+/g,'_');
+  if (!name) { showToast(' Enter a gesture name first', 'warning'); inp.focus(); return; }
+  if (!cameraActive) { showToast(' Start camera first', 'warning'); return; }
+
+  const r = await fetch('/api/recording/start', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name})
+  });
+  const d = await r.json();
+  if (d.error) { showToast(' ' + d.error, 'error'); return; }
+  setRecUI(true);
+}
+
+async function stopRec() {
+  const r = await fetch('/api/recording/stop', { method:'POST' });
+  const d = await r.json();
+  if (d.error) { showToast(' ' + d.error, 'error'); setRecUI(false); return; }
+  setRecUI(false);
+  gestureData[d.name] = d.total;
+  updateStats();
+  renderGestureList();
+  document.getElementById('gestureNameInput').value = '';
+}
+
+function setRecUI(on) {
+  ['recStart','recStartPanel'].forEach(id => {
+    const el = document.getElementById(id);
+    el.style.display = on ? 'none' : 'inline-flex';
+    el.disabled = on;
+  });
+  ['recStop','recStopPanel'].forEach(id => {
+    const el = document.getElementById(id);
+    el.style.display = on ? 'inline-flex' : 'none';
+    el.disabled = !on;
+  });
+}
+
+
+function renderGestureList() {
+  const el = document.getElementById('gestureList');
+  const names = Object.keys(gestureData);
+  if (!names.length) {
+    el.innerHTML = '<div style="font-family:var(--mono);font-size:11px;color:var(--text3);text-align:center;padding:18px;">No gestures recorded yet</div>';
+    return;
+  }
+  el.innerHTML = names.map(n => `
+    <div class="gitem" id="gi-${n}">
+      <div class="gdot ${modelTrained ? 'trained' : ''}"></div>
+      <div class="gname">${n}</div>
+      <div class="gcnt">${gestureData[n]} smp</div>
+      <div class="gmini">
+        <button class="mbtn" onclick="openModal('${n}')">⚡</button>
+        <button class="mbtn del" onclick="delGesture('${n}')">✕</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+
+async function trainModel() {
+  if (Object.keys(gestureData).length < 2) {
+    showToast(' Need at least 2 different gestures to train', 'warning'); return;
+  }
+  document.getElementById('spinWrap').style.display = 'flex';
+  document.getElementById('accBox').style.display   = 'none';
+  const r = await fetch('/api/train', { method:'POST' });
+  const d = await r.json();
+  if (d.error) {
+    showToast(' ' + d.error, 'error');
+    document.getElementById('spinWrap').style.display = 'none';
+  }
+}
+
+
+async function delGesture(name) {
+  if (!confirm(`Delete gesture "${name}" and all its samples?`)) return;
+  await fetch('/api/gesture/delete', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name})
+  });
+  delete gestureData[name];
+  delete customActions[name];
+  updateStats();
+  renderGestureList();
+  renderAassign();
+  showToast(` Deleted "${name}"`, 'info');
+}
+
+// ── Modal ────────────────────────────────────────
+function openModal(name) {
+  currentAssignGesture = name;
+  document.getElementById('mGesture').textContent = name;
+  document.getElementById('mActionSelect').value = customActions[name] || '';
+  document.getElementById('assignModal').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('assignModal').classList.remove('open');
+  currentAssignGesture = null;
+}
+
+document.getElementById('assignModal').addEventListener('click', e => {
+  if (e.target === document.getElementById('assignModal')) closeModal();
+});
+
+async function confirmAssign() {
+  const action = document.getElementById('mActionSelect').value;
+  if (!action) { showToast(' Select an action', 'warning'); return; }
+  await fetch('/api/gesture/assign_action', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({gesture: currentAssignGesture, action})
+  });
+  customActions[currentAssignGesture] = action;
+  closeModal();
+  renderAassign();
+  showToast(` Assigned: ${currentAssignGesture} → ${action}`, 'success');
+}
+
+async function testCurrentAction() {
+  const action = document.getElementById('mActionSelect').value;
+  if (!action) { showToast(' Select an action to test', 'warning'); return; }
+  await fetch('/api/action/test', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action})
+  });
+  showToast(' Test fired: ' + action, 'info');
+}
+
+
+function renderAassign() {
+  const el = document.getElementById('aassignList');
+  const names = Object.keys(gestureData);
+  if (!modelTrained || !names.length) {
+    el.innerHTML = '<div style="font-family:var(--mono);font-size:11px;color:var(--text3);">Train model first</div>';
+    return;
+  }
+  el.innerHTML = names.map(n => {
+    const a = customActions[n] || '';
+    return `
+      <div class="aitem">
+        <div class="aitem-name">${n}</div>
+        <div class="aitem-action" style="color:${a ? 'var(--cyan)' : 'var(--text3)'}">${a || 'unassigned'}</div>
+        <button class="mbtn" onclick="openModal('${n}')">⚡</button>
+      </div>
+    `;
+  }).join('');
+}
+
+
+function addLog(gesture, actionLabel) {
+  const log = document.getElementById('alog');
+  if (log.children.length === 1 && log.children[0].tagName !== 'DIV'.toUpperCase()) return;
+ 
+  if (log.children.length === 1 && log.children[0].style.fontFamily) log.innerHTML = '';
+
+  const now = new Date();
+  const ts = now.toLocaleTimeString('en-GB', {hour12:false});
+  const e = document.createElement('div');
+  e.className = 'log-entry';
+  e.innerHTML = `<span class="lt">${ts}</span><span class="lg">${gesture}</span><span class="la">→ ${actionLabel}</span>`;
+  log.insertBefore(e, log.firstChild);
+  while (log.children.length > 25) log.removeChild(log.lastChild);
+}
+
+function clearLog() {
+  document.getElementById('alog').innerHTML = '<div style="font-family:var(--mono);font-size:11px;color:var(--text3);">Cleared</div>';
+}
+
+function flashAction(label) {
+  const el = document.getElementById('actionFlash');
+  el.textContent = label;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 1200);
+}
+
+function updateStats() {
+  document.getElementById('sGestures').textContent = Object.keys(gestureData).length;
+  document.getElementById('sSamples').textContent  = Object.values(gestureData).reduce((a,b)=>a+b,0);
+}
+
+
+function showToast(msg, type='info') {
+  const c = document.getElementById('toast');
+  const t = document.createElement('div');
+  t.className = 'toast-item ' + type;
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(() => t.remove(), 3000);
+}
+
+
+async function fetchStatus() {
+  try {
+    const [sr, gr] = await Promise.all([
+      fetch('/api/status').then(r=>r.json()),
+      fetch('/api/gesture/list').then(r=>r.json()),
+    ]);
+
+    cameraActive = sr.camera_active;
+    modelTrained = sr.model_trained;
+    gestureData  = gr.gestures || {};
+    customActions = gr.custom_actions || {};
+
+    updateCameraUI();
+    setModelPill(modelTrained);
+    updateStats();
+    renderGestureList();
+    if (modelTrained) renderAassign();
+
+
+    const caps = sr.capabilities || {};
+    const strip = document.getElementById('capStrip');
+    const items = [
+      { key:'pyautogui',  label:'pyautogui (cursor/click/scroll)', req:true },
+      { key:'pycaw',      label:'pycaw (volume)',                   req:false },
+      { key:'brightness', label:'screen-brightness-control',        req:false },
+    ];
+    strip.innerHTML = items.map(i =>
+      `<div class="cap-badge ${caps[i.key] ? 'ok' : 'bad'}">${caps[i.key] ? '✓' : '✗'} ${i.label}</div>`
+    ).join('');
+    document.getElementById('capPanel').style.display = 'block';
+
+  } catch(e) { console.error('fetchStatus failed:', e); }
+}
+</script>
+</body>
+</html>
